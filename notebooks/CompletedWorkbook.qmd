@@ -1,0 +1,163 @@
+---
+title: "Most frequent words in Jane Eyre"
+html:
+  self-contained: true
+editor: visual
+---
+
+# Loading relevant libraries
+
+The dataset is processed in the software programme R, offering various methods for statistical analysis and graphic representation of the results. In R, one works with packages each adding numerous functionalities to the core functions of R. In this example, the relevant packages are:
+
+Documentation for each package: <br> *https://www.tidyverse.org/packages/* <br> https://cran.r-project.org/web/packages/tidytext/vignettes/tidytext.html <br> *https://lubridate.tidyverse.org/* <br> https://ggplot2.tidyverse.org/ <br> \*https://cran.r-project.org/web/packages/ggwordcloud/vignettes/ggwordcloud.html<br>
+
+Additional information about R: https://www.r-project.org/
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(ggwordcloud)
+library(jsonlite)
+library(stopwords)
+```
+
+# Importing the data
+
+The dataset is loaded into R. This data is loaded into R with the `read_csv` function since we have Jane Eyre in a csv-document extracted from Gutenberg Project. https://www.gutenberg.org/cache/epub/1260/pg1260.txt
+
+```{r}
+eyre <- read_csv("../data/jane_eyre_gutenbergproject.csv")
+```
+
+CSV is short for Comma Separated Values that is a way of structuring a dataset in plain text. CSV files are structured in columns separated by commas and in rows separated by lines. Each row in the data correspond to identified articles by the segmentations-process during the digitisation process of the newspapers.\
+In the output from the `read_csv`-function R tells us which columns are present in the dataset and what type of data it has recognised in the column's rows. Most of them are "col_character()", which means the rows in the column contains textual data (character signs). Others have the "col_double()", which means the rows in the column contains numbers. This is a question of datatypes, which can be very important when coding, but in the case of this workshop we won't work further with them.
+
+# The text mining task
+
+Text mining is a term that covers a large variety of approaches and concrete methods. In this example we will use the tidytext approach, which is presented in the book [Text Mining with R - a tidy approach](https://www.tidytextmining.com). The method we will be employing is the term frequency - inversed document frequency. This method can be used to create little "summaries" of documents within a corpus by extracting the words that are most significant to each document. By doing this we can create a so-called distant reading of a large data corpus.
+
+This code takes the dataset eyre and applies unnest_tokens(word, text), which tokenizes the text column into individual words. Each word becomes a separate row in the new dataset eyre_tidy, stored in the word column. This process is commonly used in text mining to break text into manageable units for analysis
+
+```{r}
+eyre_tidy <- eyre %>% 
+  unnest_tokens(word, text)
+```
+
+## Most occurring words
+
+Since we now has the text from the articles on the one word pr. row-format we can count the words to see, which words are used most frequently.
+
+```{r}
+eyre_tidy %>% 
+  count(word, sort = TRUE)
+```
+
+Not surprisingly, particles are the most common words we find. This is not particularly interesting for us in this enquiry. We sort them out by using a stop word list: Using this list (from the tidytext library) for sorting out the words we can redo the counting:
+
+```{r}
+eyre_tidy %>% 
+  anti_join(stop_words, by = "word") %>% 
+  count(word, sort = TRUE)
+```
+
+## Counting longer words
+
+This code filters words in the eyre_tidy dataset to keep only those with more than 8 characters. Then, it counts the occurrences of these words and sorts the result in descending order of frequency.
+
+```{r}
+eyre_tidy %>% 
+  filter(str_length(word) > 8) %>% 
+  count(word, sort = TRUE) 
+```
+
+# More context: bigrams
+
+In this section we'll try to give a bit more context by seeing which words is used before words of interest. This is done by using bigrams N-grams are overlapping, so in a scenario with bigrams, the text "the happy cat walks on the ridge" becomes:
+
+"the happy", "happy cat", "cat walks", "walks", "on the ridge", "the ridge NA"
+
+Please note that the last word in the last bigram is the value "NA". There is no last word in this bigram. As before, we use unnest_tokens, but this time we specify that we want word pairs (bigrams). This time we filter out the preface (chapter 0)
+
+```{r}
+eyre_bigram <- eyre %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+```
+
+Just like with before with words, we can also count bigrams:
+
+```{r}
+eyre_bigram %>% 
+  count(bigram, sort = TRUE)
+```
+
+Once again we encounter stop words that are disrupting us. We would like to filter out word pairs with stop words. Before we can remove word pairs where one of the words is a stop word, we need to split the column "bigram" into two: "word1", "word2":
+
+```{r}
+eyre_bigram %>% 
+   separate(bigram, c("word1", "word2"), sep = " ") -> eyre_bigram
+```
+
+Then we can filter out the stop words in both columns, which we save to a new dataframe:
+
+```{r}
+eyre_bigram %>% 
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) -> eyre_bigram_filtered 
+```
+
+Next, we can count our bigrams without stop words:
+
+```{r}
+eyre_bigram_filtered %>% 
+  count(word1, word2, sort = TRUE)
+```
+
+First of all, we save the above count to a new data frame so that we can continue working with it:
+
+```{r}
+eyre_bigram_filtered %>% 
+  drop_na() %>% 
+  count(word1, word2, sort = TRUE) -> eyre_bigram_count
+```
+
+Afterwards, we use the "igraph" package to convert our dataframe into a network graph element. Before that, we specify that we are only interested in bigrams that occur more than 3 times:
+
+```{r}
+library(igraph)
+
+bigram_graph <- eyre_bigram_count %>%
+  filter(n >= 5) %>%
+  graph_from_data_frame()
+```
+
+Finally, we use the "ggraph" package to visualize the network:
+
+```{r}
+set.seed(1234)
+library(ggraph)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "darkgreen", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void() +
+  ggtitle("Bigrams in Jane Eyre with more than or 5 occurences after filtering out stop words")
+```
+```{r}
+ggsave("../graphics/20250224_eyre_bigrams.png", width = 14, height = 9, device = "png", bg = "white")
+```
+
+# KWIC (Key Word In Context)
+
+```{r}
+library(quanteda)
+
+corp <- corpus(eyre,docid_field = "chapter",  text_field = "text",)
+
+kwic(tokens(corp, remove_punct = TRUE), 
+          pattern = phrase("low voice"),
+          window = 5
+          )
+```

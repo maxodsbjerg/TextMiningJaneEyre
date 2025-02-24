@@ -1,0 +1,141 @@
+---
+title: "Text Mining Jane Eyre"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidytext)
+library(tidyverse)
+```
+
+# Load the data
+
+```{r}
+eyre <- tibble(text = read_lines("https://www.gutenberg.org/cache/epub/1260/pg1260.txt"))
+```
+
+
+```{r}
+eyre <- eyre %>% 
+  mutate(book = "Jane Eyre") %>% 
+  mutate(chapter = cumsum(str_detect(text, 
+                                     regex("^chapter [\\divxlc]",
+                                           ignore_case = TRUE))))
+```
+
+```{r}
+eyre %>%
+  group_by(chapter) %>%
+  summarise(text = paste(text, collapse = " ")) -> eyre
+```
+
+
+```{r}
+write_csv(eyre, "../data/jane_eyre_gutenbergproject.csv")
+```
+
+
+
+```{r}
+eyre_tfidf <- eyre %>% 
+  unnest_tokens(word, text) %>% 
+  count(chapter, word) %>% 
+  bind_tf_idf(word, chapter, n)
+```
+
+```{r}
+eyre_tfidf %>% 
+  filter(chapter %in% 1:37) %>% 
+  group_by(chapter) %>%
+  slice_max(tf_idf, n = 15) %>%
+  ungroup %>%
+  mutate(word = reorder_within(word, tf_idf, chapter)) %>%
+  ggplot(aes(word, tf_idf, fill = chapter)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~chapter, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered() +
+  scale_y_continuous(expand = c(0,0)) +
+  labs(title = "Significant words withing each chapter of Jane Eyre", subtitle = "Signifance determined by term frequency - inversed document frequency")
+```
+
+# sentiment 
+
+```{r}
+eyre_bing_counts <- eyre %>% 
+  unnest_tokens(word, text) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(word, sentiment, sort = TRUE)
+```
+
+```{r}
+eyre_bing_counts %>% 
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+# Bigrams 
+
+
+```{r}
+eyre_bigrams <- eyre %>% 
+  filter(chapter %in% 1:37) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>% 
+  filter(!is.na(bigram))
+```
+
+
+# Separated
+```{r}
+eyre_bigrams %>% 
+  separate(bigram, into = c("word1", "word2"), sep = " ") -> bigrams_sep
+```
+
+```{r}
+bigrams_filtered <- bigrams_sep %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+```
+
+
+```{r}
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+```
+
+
+```{r}
+bigram_counts
+```
+
+
+```{r}
+library(igraph)
+
+bigram_graph <- bigram_counts %>%
+  filter(n >= 5) %>%
+  graph_from_data_frame()
+```
+
+Finally, we use the "ggraph" package to visualize the network:
+
+
+
+```{r}
+library(ggraph)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "darkgreen", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
